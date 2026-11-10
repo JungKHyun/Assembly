@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>페이지를 찾을 수 없습니다</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Noto Sans KR", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f7fb; color: #172033; }
+    main { width: min(34rem, calc(100% - 3rem)); padding: 2.5rem; border-radius: 1rem; background: #fff; box-shadow: 0 1rem 3rem rgba(23,32,51,.1); }
+    h1 { margin-top: 0; font-size: 1.75rem; }
+    p { line-height: 1.7; color: #526078; }
+    a { display: inline-block; margin-top: .5rem; padding: .75rem 1rem; border-radius: .6rem; background: #1f5eff; color: #fff; text-decoration: none; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>페이지를 찾을 수 없습니다</h1>
+    <p>주소가 변경되었거나 잘못 입력되었습니다. 아래 버튼으로 시작 화면으로 이동해 주세요.</p>
+    <a id="home-link" href="./web/">시작 화면으로 이동</a>
+  </main>
+  <script>
+    const segments = window.location.pathname.split("/").filter(Boolean);
+    const repositoryBase = segments.length ? `/${segments[0]}/` : "/";
+    document.querySelector("#home-link").href = `${repositoryBase}web/`;
+  </script>
+</body>
+</html>
