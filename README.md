@@ -4,9 +4,9 @@
 
 ## 사용해 보기
 
-- [시작 화면](https://assembly-request-tool.vercel.app/)
-- [접수·배분 화면](https://assembly-request-tool.vercel.app/assign.html)
-- [현업 회신 화면](https://assembly-request-tool.vercel.app/dept.html)
+- [시작 화면](https://assembly-neon.vercel.app/)
+- [접수·배분 화면](https://assembly-neon.vercel.app/assign.html)
+- [현업 회신 화면](https://assembly-neon.vercel.app/dept.html)
 
 Vercel 접근 보호가 적용되어 로그인 화면이 표시될 수 있습니다.
 
