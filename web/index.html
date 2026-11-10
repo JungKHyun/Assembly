@@ -4,11 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./lib/tabulator.min.css">
   <title>A부 국회 요구자료</title>
   <style>
     .status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:26px 0}.status-card{padding:24px}.status-card span{color:var(--muted);font-size:.82rem;font-weight:900}.status-card strong{display:block;margin-top:8px;font-size:2.7rem;line-height:1;color:var(--navy)}
     .workflow{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.workflow article{position:relative;padding:24px;min-height:190px}.workflow .step{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--navy);color:white;font-weight:900}.workflow h2{margin:18px 0 8px;font-size:1.15rem;color:var(--navy)}.workflow p{margin:0;color:var(--muted);font-size:.9rem}.workflow a{display:inline-block;margin-top:18px;text-decoration:none}.workflow article.locked{opacity:.62}.guide{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px 24px;margin-top:18px}.guide p{margin:0;color:var(--muted)}
-    @media(max-width:800px){.status-grid,.workflow{grid-template-columns:1fr}.guide{align-items:flex-start;flex-direction:column}}
+    .dashboard-grid{display:grid;grid-template-columns:minmax(260px,.7fr) minmax(0,1.3fr);gap:16px;margin:0 0 18px}.dashboard-panel{padding:20px}.dashboard-panel h2{margin:0 0 14px;font-size:1rem;color:var(--navy)}.chart-box{height:250px;position:relative}
+    @media(max-width:800px){.status-grid,.workflow,.dashboard-grid{grid-template-columns:1fr}.guide{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
@@ -17,8 +19,9 @@
       <div class="brand">A부 국회 요구자료</div>
       <a href="./index.html" class="active" aria-current="page">시작 화면</a>
       <a href="./assign.html">배분</a>
-      <a href="#" class="disabled" aria-disabled="true" title="S6에서 구현">현업 회신 · S6</a>
+      <a href="./dept.html">현업 회신</a>
       <a href="#" class="disabled" aria-disabled="true" title="S8에서 구현">취합 · S8</a>
+      <span class="badge storage-mode" data-storage-mode></span>
       <button type="button" class="btn danger nav-reset" id="resetDataButton">자료 초기화</button>
     </nav>
   </header>
@@ -28,9 +31,20 @@
       <div>
         <p class="eyebrow">Assembly request desk</p>
         <h1>국회 요구자료의 흐름을<br>한곳에서 확인합니다.</h1>
-        <p>요구서를 접수해 문항별로 나누고, 규칙 후보를 확인한 뒤 담당자가 배분을 확정합니다. 자료는 현재 이 브라우저에만 저장됩니다.</p>
+        <p>요구서를 접수해 문항별로 나누고, 규칙 후보를 확인한 뒤 담당자가 배분을 확정합니다. Vercel에서는 서버 공유 저장, 그 밖의 주소에서는 브라우저 저장을 사용합니다.</p>
       </div>
       <a class="btn" href="./assign.html">배분 화면 열기</a>
+    </section>
+
+    <section class="dashboard-grid" data-reveal aria-label="현황 상세">
+      <article class="card dashboard-panel">
+        <h2>처리 상태 비율</h2>
+        <div class="chart-box"><canvas id="statusChart" aria-label="처리 상태 차트"></canvas></div>
+      </article>
+      <article class="card dashboard-panel">
+        <h2>최근 등록 문항</h2>
+        <div id="recentCasesTable"></div>
+      </article>
     </section>
 
     <section class="status-grid" data-reveal aria-label="처리 현황">
@@ -45,10 +59,10 @@
         <p>PDF를 문항 단위로 나누고 후보 3순위를 확인해 주관·협조 과를 확정합니다.</p>
         <a class="btn secondary" href="./assign.html">업무 시작</a>
       </article>
-      <article class="card locked">
+      <article class="card">
         <span class="step">2</span><h2>현업 회신</h2>
-        <p>배분된 문항을 과별로 확인하고 회신 자료를 등록합니다. S6에서 이어집니다.</p>
-        <span class="badge">S6 예정</span>
+        <p>내 과에 배분된 문항을 확인하고 회신 자료를 등록하거나 재배정을 요청합니다.</p>
+        <a class="btn secondary" href="./dept.html">회신 화면</a>
       </article>
       <article class="card locked">
         <span class="step">3</span><h2>취합·검사</h2>
@@ -59,24 +73,55 @@
 
     <section class="card guide" data-reveal>
       <p><b>실행 안내</b> · 더블클릭 대신 작업 폴더에서 <code>python -m http.server 8000 -d web</code>을 실행하세요.</p>
-      <span class="badge">브라우저 저장 · localStorage</span>
+      <span class="badge storage-mode" data-storage-mode></span>
     </section>
   </main>
 
+  <script src="./lib/papaparse.min.js"></script>
+  <script src="./lib/chart.umd.min.js"></script>
+  <script src="./lib/tabulator.min.js"></script>
   <script src="./common.js"></script>
-  <script>
+  <script type="module">
     AppCommon.injectStyles();
     AppCommon.setupReveal();
+    AppCommon.showStorageMode();
+    await AppCommon.loadDb(true);
+    let statusChart;
+    const recentTable = new Tabulator("#recentCasesTable", {
+      height: 250, layout: "fitColumns", placeholder: "등록된 문항이 없습니다.",
+      data: AppCommon.getCases().slice(-10).reverse(),
+      columns: [
+        { title: "상태", field: "상태", width: 100, headerSort: true },
+        { title: "의원", field: "의원", width: 100 },
+        { title: "번호", field: "문항번호", width: 75, hozAlign: "center" },
+        { title: "요구내용", field: "요구내용", minWidth: 220, formatter: "textarea" },
+        { title: "주관 과", field: "주관과", width: 140 },
+      ],
+    });
     function renderCounts() {
       const counts = AppCommon.getCounts();
       document.querySelector("#totalCount").textContent = counts.전체;
       document.querySelector("#receivedCount").textContent = counts.접수;
       document.querySelector("#confirmedCount").textContent = counts.배분확정;
+      const cases = AppCommon.getCases();
+      recentTable.setData(cases.slice(-10).reverse());
+      const data = [counts.접수, counts.배분확정, counts.회신중, counts.회신완료, counts.재배정요청];
+      if (statusChart) {
+        statusChart.data.datasets[0].data = data;
+        statusChart.update();
+      } else {
+        statusChart = new Chart(document.querySelector("#statusChart"), {
+          type: "doughnut",
+          data: { labels: ["접수", "배분확정", "회신중", "회신완료", "재배정요청"], datasets: [{ data, backgroundColor: ["#d8a64b", "#315e8a", "#5b8fb9", "#2e8b70", "#b65c5c"], borderWidth: 0 }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } } },
+        });
+      }
     }
     renderCounts();
     window.addEventListener("storage", renderCounts);
     window.addEventListener("cases:changed", renderCounts);
     document.querySelector("#resetDataButton").addEventListener("click", () => {
+      if (AppCommon.SERVER_MODE) { window.alert("서버 공유 자료는 화면에서 일괄 삭제할 수 없습니다."); return; }
       const count = AppCommon.getCases().length;
       if (!count) return;
       if (!window.confirm(`브라우저에 저장된 ${count}개 문항과 배분 기록을 모두 지울까요? 원본 PDF와 CSV는 삭제되지 않습니다.`)) return;

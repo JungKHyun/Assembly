@@ -5,6 +5,7 @@
 
 # 의존성·캐시
 node_modules/
+.vercel/
 __pycache__/
 *.py[cod]
 
@@ -27,3 +28,8 @@ results/
 
 # 과정 규칙상 공개·열람하지 않는 완성본
 99_완성본_잠금/
+
+# 배포 도구 임시 폴더
+.wrangler/
+.deploy-current/
+*.bak*

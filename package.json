@@ -1,0 +1,15 @@
+{
+  "name": "assembly-request-tool",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test_api.js && node test_client.js"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.3.0"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}

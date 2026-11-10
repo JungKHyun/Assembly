@@ -25,8 +25,9 @@
       <div class="brand">A부 국회 요구자료</div>
       <a href="./index.html">시작 화면</a>
       <a href="./assign.html" class="active" aria-current="page">배분</a>
-      <a href="#" class="disabled" aria-disabled="true" title="S6에서 구현">현업 회신 · S6</a>
+      <a href="./dept.html">현업 회신</a>
       <a href="#" class="disabled" aria-disabled="true" title="S8에서 구현">취합 · S8</a>
+      <span class="badge storage-mode" data-storage-mode></span>
       <button type="button" class="btn danger nav-reset" id="resetDataButton">자료 초기화</button>
     </nav>
   </header>
@@ -61,9 +62,9 @@
           <input id="pdfInput" type="file" accept="application/pdf,.pdf" multiple>
         </label>
         <label class="drop">
-          <h3>문항목록 CSV</h3>
+          <h3>문항목록 CSV·엑셀</h3>
           <p>split.py 결과와 같은 8개 열을 읽습니다.</p>
-          <input id="csvInput" type="file" accept="text/csv,.csv">
+          <input id="csvInput" type="file" accept="text/csv,.csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
         </label>
       </div>
       <div class="progress-wrap" id="progressWrap" aria-live="polite">
@@ -79,23 +80,31 @@
           <p class="help">1순위가 주관 과 기본값입니다. 변경하면 확정방법이 ‘수정’으로 기록됩니다.</p>
         </div>
         <div class="toolbar">
+          <button type="button" class="btn secondary" id="exportExcelButton">엑셀 내보내기</button>
           <input id="searchInput" type="search" placeholder="의원·요구내용 검색" aria-label="문항 검색">
           <select id="stateFilter" aria-label="상태 필터">
             <option value="전체">전체 상태</option>
             <option value="접수">접수</option>
             <option value="배분확정">배분확정</option>
+            <option value="재배정요청">재배정요청</option>
+            <option value="회신중">회신중</option>
+            <option value="회신완료">회신완료</option>
           </select>
         </div>
       </div>
+      <div id="assignNotice" class="notice" role="status" aria-live="polite" style="margin-bottom:14px">주관 과를 확인한 뒤 배분 확정을 누르세요.</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>상태</th><th>의원·문항</th><th>요구내용</th><th>후보 3순위</th><th>주관 과·협조 과</th><th>확정</th></tr></thead>
+          <thead><tr><th>상태</th><th>의원·문항</th><th>요구내용·과거 이력</th><th>후보 3순위</th><th>주관 과·협조 과</th><th>확정</th></tr></thead>
           <tbody id="caseRows"><tr><td colspan="6" class="empty">등록된 문항이 없습니다.</td></tr></tbody>
         </table>
       </div>
     </section>
   </main>
 
+  <script src="./lib/papaparse.min.js"></script>
+  <script src="./lib/xlsx.full.min.js"></script>
+  <script src="./lib/fuse.min.js"></script>
   <script src="./common.js"></script>
   <script src="./split.js"></script>
   <script src="./engine.js"></script>
@@ -105,6 +114,7 @@
 
     AppCommon.injectStyles();
     AppCommon.setupReveal();
+    AppCommon.showStorageMode();
 
     const elements = {
       pdfInput: document.querySelector("#pdfInput"), csvInput: document.querySelector("#csvInput"),
@@ -115,15 +125,22 @@
       countAll: document.querySelector("#countAll"), countReceived: document.querySelector("#countReceived"),
       countConfirmed: document.querySelector("#countConfirmed"), countPending: document.querySelector("#countPending"),
       resetDataButton: document.querySelector("#resetDataButton"),
+      exportExcelButton: document.querySelector("#exportExcelButton"),
+      assignNotice: document.querySelector("#assignNotice"),
     };
 
     let departments = [];
+    let historyRows = [];
     let pendingCases = [];
-    let storedCases = AppCommon.getCases();
+    let storedCases = [];
+    let saving = false;
+    let savingId = "";
 
     function setNotice(message, error = false) {
       elements.notice.textContent = message;
       elements.notice.classList.toggle("error", error);
+      elements.assignNotice.textContent = message;
+      elements.assignNotice.classList.toggle("error", error);
     }
 
     function setProgress(value, label = `${Math.round(value)}%`) {
@@ -154,7 +171,7 @@
     function candidateHtml(candidates) {
       if (!candidates.length) return '<span class="badge wait">확인필요</span>';
       return `<div class="candidate-list">${candidates.map((item, index) => `
-        <div class="candidate"><span><b>${index + 1}. ${AppCommon.escapeHtml(item.과)}</b><br><small>${AppCommon.escapeHtml(item.근거키워드)}</small></span><strong>${item.점수}</strong></div>
+        <div class="candidate"><span><b>${index + 1}. ${AppCommon.escapeHtml(item.과)}</b><br><small>${AppCommon.escapeHtml(item.근거키워드 || item.근거)}</small></span>${item.점수 ? `<strong>${item.점수}</strong>` : ""}</div>
       `).join("")}</div>`;
     }
 
@@ -165,15 +182,29 @@
       }).join("");
     }
 
+    function confirmationState(item) {
+      const saved = AppCommon.getCases().find((candidate) => candidate.id === item.id);
+      const supportKey = (value, primary) => JSON.stringify([...new Set(value || [])].filter((department) => department !== primary).sort());
+      const unchanged = saved?.상태 === "배분확정" && saved.주관과 === item.주관과
+        && supportKey(saved.협조과, saved.주관과) === supportKey(item.협조과, item.주관과);
+      const label = savingId === item.id ? "저장 중…" : pendingCases.length ? "접수 등록 후 확정"
+        : item.상태 === "재배정요청" ? "다시 배분" : unchanged ? "배분 완료"
+        : saved?.상태 === "배분확정" ? "배분 변경 확정" : "배분 확정";
+      const disabled = saving || pendingCases.length > 0 || !["접수", "재배정요청", "배분확정"].includes(item.상태) || !item.주관과 || unchanged;
+      return { label, disabled };
+    }
+
     function render() {
+      elements.registerButton.disabled = saving || !pendingCases.length;
+      elements.pdfInput.disabled = saving;
+      elements.csvInput.disabled = saving;
       const base = pendingCases.length ? pendingCases : storedCases;
-      const query = elements.search.value.trim().toLowerCase();
+      const query = elements.search.value.trim();
       const state = elements.state.value;
-      const visible = base.filter((item) => {
-        const matchesQuery = !query || `${item.의원} ${item.요구내용}`.toLowerCase().includes(query);
-        const matchesState = state === "전체" || item.상태 === state;
-        return matchesQuery && matchesState;
-      });
+      const stateMatches = base.filter((item) => state === "전체" || item.상태 === state);
+      const visible = query
+        ? new Fuse(stateMatches, { keys: ["의원", "요구내용", "문항번호", "주관과"], threshold: 0.35, ignoreLocation: true }).search(query).map((result) => result.item)
+        : stateMatches;
 
       if (!visible.length) {
         elements.rows.innerHTML = `<tr><td colspan="6" class="empty">${base.length ? "검색 조건에 맞는 문항이 없습니다." : "등록된 문항이 없습니다."}</td></tr>`;
@@ -183,21 +214,27 @@
 
       elements.rows.innerHTML = visible.map((item) => {
         const rowIndex = base.indexOf(item);
-        const confirmed = item.상태 === "배분확정";
+        const editable = ["접수", "재배정요청", "배분확정"].includes(item.상태);
+        const confirmation = confirmationState(item);
+        const latestReassignment = item.재배정?.at(-1);
         const details = [item.세부항목, item.비고].filter(Boolean).join(" / ");
         return `<tr data-row-index="${rowIndex}">
-          <td><span class="badge ${confirmed ? "confirmed" : "wait"}">${AppCommon.escapeHtml(item.상태)}</span></td>
+          <td><span class="badge ${item.상태 === "배분확정" ? "confirmed" : "wait"}">${AppCommon.escapeHtml(item.상태)}</span>${item.상태 === "재배정요청" && latestReassignment ? `<div class="history"><b>재배정 사유</b><br>${AppCommon.escapeHtml(latestReassignment.사유)}<br><span>희망 과 · ${AppCommon.escapeHtml(latestReassignment.희망과 || "미지정")}</span></div>` : ""}</td>
           <td><b>${AppCommon.escapeHtml(item.의원)}</b><br>${item.문항번호}번<br><small>${AppCommon.escapeHtml(item.제출기한)}</small></td>
-          <td class="request">${AppCommon.escapeHtml(item.요구내용)}${details ? `<small>${AppCommon.escapeHtml(details).replaceAll("\n", " · ")}</small>` : ""}</td>
+          <td class="request">${AppCommon.escapeHtml(item.요구내용)}${details ? `<small>${AppCommon.escapeHtml(details).replaceAll("\n", " · ")}</small>` : ""}${AppCommon.historyHtml(AppCommon.findHistory(item, historyRows))}</td>
           <td>${candidateHtml(item.후보)}</td>
           <td class="department-cell">
-            <label>주관 과</label><select class="primary-select" ${confirmed ? "disabled" : ""}><option value="">선택</option>${optionHtml(item.주관과)}</select>
-            <label>협조 과(여러 개 선택)</label><select class="support-select" multiple ${confirmed ? "disabled" : ""}>${optionHtml(item.협조과, true)}</select>
+            <label>주관 과</label><select class="primary-select" ${editable ? "" : "disabled"}><option value="">선택</option>${optionHtml(item.주관과)}</select>
+            <label>협조 과(여러 개 선택)</label><select class="support-select" multiple ${editable ? "" : "disabled"}>${optionHtml(item.협조과, true)}</select>
           </td>
-          <td class="confirm-cell"><button type="button" class="btn confirm-button" ${confirmed || !item.주관과 ? "disabled" : ""}>${confirmed ? "확정됨" : "배분 확정"}</button>${item.확정방법 ? `<span class="method">${AppCommon.escapeHtml(item.확정방법)}<br>${AppCommon.escapeHtml(item.확정일시)}</span>` : ""}</td>
+          <td class="confirm-cell"><button type="button" class="btn confirm-button" ${confirmation.disabled ? "disabled" : ""}>${confirmation.label}</button>${pendingCases.length ? '<span class="method">위쪽 [접수 등록]을 먼저 눌러 주세요.</span>' : ""}${item.확정방법 ? `<span class="method">${AppCommon.escapeHtml(item.확정방법)}<br>${AppCommon.escapeHtml(item.일시?.배분 || "")}</span>` : ""}</td>
         </tr>`;
       }).join("");
       updateCounts();
+      elements.registerButton.disabled = saving || !pendingCases.length;
+      elements.pdfInput.disabled = saving;
+      elements.csvInput.disabled = saving;
+      elements.rows.querySelectorAll("select").forEach((select) => { if (saving) select.disabled = true; });
     }
 
     function currentBase() {
@@ -210,29 +247,36 @@
       const item = currentBase()[Number(row.dataset.rowIndex)];
       if (event.target.classList.contains("primary-select")) {
         item.주관과 = event.target.value;
-        row.querySelector(".confirm-button").disabled = !item.주관과;
       }
       if (event.target.classList.contains("support-select")) {
         item.협조과 = [...event.target.selectedOptions].map((option) => option.value).filter((value) => value !== item.주관과);
       }
+      const confirmation = confirmationState(item);
+      const button = row.querySelector(".confirm-button");
+      button.textContent = confirmation.label;
+      button.disabled = confirmation.disabled;
     });
 
-    elements.rows.addEventListener("click", (event) => {
+    elements.rows.addEventListener("click", async (event) => {
       const button = event.target.closest(".confirm-button");
-      if (!button) return;
+      if (!button || saving || button.disabled) return;
       const row = button.closest("tr[data-row-index]");
       const item = currentBase()[Number(row.dataset.rowIndex)];
       if (!item || !item.주관과 || pendingCases.length) {
         if (pendingCases.length) setNotice("먼저 [접수 등록]을 눌러 문항을 저장해 주세요.", true);
         return;
       }
-      item.상태 = "배분확정";
-      item.확정방법 = item.주관과 === item.후보[0]?.과 ? "규칙" : "수정";
-      item.확정일시 = new Date().toLocaleString("ko-KR", { hour12: false });
-      item.협조과 = item.협조과.filter((department) => department !== item.주관과);
-      AppCommon.saveCases(storedCases);
-      setNotice(`${item.의원} ${item.문항번호}번을 ${item.주관과}로 배분 확정했습니다.`);
-      render();
+      try {
+        saving = true;
+        savingId = item.id;
+        setNotice(`${item.의원} ${item.문항번호}번 배분을 저장 중입니다. 잠시 기다려 주세요.`);
+        render();
+        const method = item.주관과 === item.후보[0]?.과 ? "규칙" : "수정";
+        await AppCommon.applyRequest({ 작업: "배분", id: item.id, 주관과: item.주관과, 협조과: item.협조과, 확정방법: method, 후보: item.후보 }, departments);
+        storedCases = enrich((await AppCommon.loadDb(true)).cases);
+        setNotice(`${item.의원} ${item.문항번호}번을 ${item.주관과}로 배분 확정했습니다.`);
+      } catch (error) { setNotice(`배분 확정 실패: ${error.message} · 선택한 과를 확인하고 다시 시도해 주세요.`, true); }
+      finally { saving = false; savingId = ""; render(); }
     });
 
     elements.pdfInput.addEventListener("change", async () => {
@@ -266,7 +310,14 @@
       const file = elements.csvInput.files[0];
       if (!file) return;
       try {
-        const rows = AppCommon.csvToObjects(await AppCommon.readTextFile(file));
+        let rows;
+        if (/\.xlsx?$/i.test(file.name)) {
+          const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          rows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: false });
+        } else {
+          rows = AppCommon.csvToObjects(await AppCommon.readTextFile(file));
+        }
         pendingCases = enrich(AppCommon.rowsToCases(rows));
         setProgress(100, "완료");
         setNotice(`${file.name}에서 ${pendingCases.length}문항을 읽었습니다.`);
@@ -279,20 +330,39 @@
       }
     });
 
-    elements.registerButton.addEventListener("click", () => {
-      if (!pendingCases.length) return;
-      const result = AppCommon.mergeCases(pendingCases);
-      storedCases = result.cases;
-      const total = pendingCases.length;
-      pendingCases = [];
-      elements.registerButton.disabled = true;
-      elements.pdfInput.value = "";
-      elements.csvInput.value = "";
-      setNotice(`${total}문항 확인 · 신규 ${result.added}건 등록 · 기존 미확정 ${result.updated}건 갱신`);
-      render();
+    elements.registerButton.addEventListener("click", async () => {
+      if (!pendingCases.length || saving) return;
+      try {
+        saving = true;
+        setNotice(`${pendingCases.length}문항을 접수 등록 중입니다. 완료 후 배분을 확정할 수 있습니다.`);
+        render();
+        const total = pendingCases.length;
+        const result = await AppCommon.registerCases(pendingCases, departments);
+        storedCases = enrich(result.db.cases); pendingCases = [];
+        elements.pdfInput.value = ""; elements.csvInput.value = "";
+        setNotice(`${total}문항 확인 · 신규 ${result.added}건 등록 · 기존 ${result.skipped}건 건너뜀`);
+      } catch (error) { setNotice(`접수 등록 실패: ${error.message}`, true); }
+      finally { saving = false; render(); }
+    });
+
+    elements.exportExcelButton.addEventListener("click", () => {
+      if (!storedCases.length) {
+        setNotice("내보낼 등록 문항이 없습니다.", true);
+        return;
+      }
+      const rows = storedCases.map((item) => ({
+        파일명: item.파일명, 위원회: item.위원회, 의원: item.의원, 제출기한: item.제출기한,
+        문항번호: item.문항번호, 요구내용: item.요구내용, 세부항목: item.세부항목, 비고: item.비고,
+        상태: item.상태, 주관과: item.주관과, 협조과: item.협조과.join(", "), 확정방법: item.확정방법,
+      }));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "배분현황");
+      XLSX.writeFile(workbook, `국회요구자료_배분현황_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      setNotice(`${storedCases.length}개 문항의 배분 현황을 엑셀로 만들었습니다.`);
     });
 
     elements.resetDataButton.addEventListener("click", () => {
+      if (AppCommon.SERVER_MODE) { setNotice("서버 공유 자료는 화면에서 일괄 삭제할 수 없습니다.", true); return; }
       const count = storedCases.length;
       const pendingCount = pendingCases.length;
       if (!count && !pendingCount) {
@@ -316,11 +386,11 @@
 
     elements.search.addEventListener("input", render);
     elements.state.addEventListener("change", render);
-    window.addEventListener("storage", () => { storedCases = AppCommon.getCases(); render(); });
+    window.addEventListener("storage", async () => { storedCases = enrich((await AppCommon.loadDb(true)).cases); render(); });
 
     try {
-      await Promise.all([RequirementEngine.initialize(), AppCommon.loadDepartments().then((value) => { departments = value; })]);
-      storedCases = enrich(storedCases);
+      const [, loadedDepartments, loadedHistory, db] = await Promise.all([RequirementEngine.initialize(), AppCommon.loadDepartments(), AppCommon.loadHistory(), AppCommon.loadDb(true)]);
+      departments = loadedDepartments; historyRows = loadedHistory; storedCases = enrich(db.cases);
       render();
     } catch (error) {
       console.error(error);
